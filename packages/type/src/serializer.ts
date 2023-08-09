@@ -13,6 +13,7 @@ import {
     CompilerContext,
     CustomError,
     getObjectKeysSize,
+    hasProperty,
     isArray,
     isFunction,
     isInteger,
@@ -52,6 +53,7 @@ import {
     referenceAnnotation,
     ReflectionKind,
     resolveTypeMembers,
+    stringifyResolvedType,
     stringifyType,
     Type,
     TypeClass,
@@ -471,7 +473,7 @@ export class TemplateState {
 
     assignValidationError(code: string, message: string) {
         this.setContext({ ValidationErrorItem: ValidationErrorItem });
-        return `if (state.errors) state.errors.push(new ValidationErrorItem(${collapsePath(this.path)}, ${JSON.stringify(code)}, ${JSON.stringify(message)}));`;
+        return `if (state.errors) state.errors.push(new ValidationErrorItem(${collapsePath(this.path)}, ${JSON.stringify(code)}, ${JSON.stringify(message)}, ${this.originalAccessor}));`;
     }
 
     throwCode(type: Type | string, error?: string, accessor: string | ContainerAccessor = this.originalAccessor) {
@@ -509,7 +511,10 @@ export class TemplateState {
 
     setContext(values: { [name: string]: any }) {
         for (const i in values) {
-            if (!values.hasOwnProperty(i)) continue;
+            if (!hasProperty(values, i)) {
+                console.log('hasProperty is false: ', i, values[i], hasProperty(values, i));
+                continue;
+            }
             this.compilerContext.context.set(i, values[i]);
         }
     }
@@ -959,10 +964,10 @@ export function sortSignatures(signatures: TypeIndexSignature[]) {
 
 export function getStaticDefaultCodeForProperty(member: TypeProperty | TypePropertySignature, setter: string | ContainerAccessor, state: TemplateState) {
     let staticDefault = ``;
-    if (!hasDefaultValue(member)) {
+    if (!hasDefaultValue(member) && !isOptional(member)) {
         if (member.type.kind === ReflectionKind.literal) {
             staticDefault = `${setter} = ${state.compilerContext.reserveConst(member.type.literal)};`;
-        } else if (!isOptional(member) && isNullable(member.type)) {
+        } else if (isNullable(member.type)) {
             staticDefault = `${setter} = null;`;
         }
     }
@@ -1091,7 +1096,7 @@ export function serializeObjectLiteral(type: TypeObjectLiteral | TypeClass, stat
                 const readName = getNameExpression(state.namingStrategy.getPropertyName(property.property, state.registry.serializer.name), state);
 
                 const propertyState = state.fork(argumentName, new ContainerAccessor(state.accessor, readName)).extendPath(String(property.getName()));
-                const staticDefault = property.type.kind === ReflectionKind.literal ? `${argumentName} = ${state.compilerContext.reserveConst(property.type.literal)};` : '';
+                const staticDefault = property.type.kind === ReflectionKind.literal && !property.isOptional() ? `${argumentName} = ${state.compilerContext.reserveConst(property.type.literal)};` : '';
 
                 const embedded = property.getEmbedded();
                 if (embedded) {
@@ -1154,11 +1159,12 @@ export function serializeObjectLiteral(type: TypeObjectLiteral | TypeClass, stat
             }`);
         }
 
+        state.setContext({ hasProperty });
         //the index signature type could be: string, number, symbol.
         //or a literal when it was constructed by a mapped type.
         lines.push(`
         for (const ${i} in ${state.accessor}) {
-            if (!${state.accessor}.hasOwnProperty(${i})) continue;
+            if (!hasProperty(${state.accessor}, ${i})) continue;
             if (${existingCheck}) continue;
             if (false) {} ${signatureLines.join(' ')}
         }
@@ -1291,14 +1297,14 @@ export function typeGuardObjectLiteral(type: TypeObjectLiteral | TypeClass, stat
                 existing.push(readName);
 
                 state.setContext({ unpopulatedSymbol });
+                const forType: Type = member.kind === ReflectionKind.methodSignature || member.kind === ReflectionKind.method
+                    ? { kind: ReflectionKind.function, name: memberNameToString(member.name), return: member.return, parameters: member.parameters }
+                    : member.type;
+                const checkTemplate = executeTemplates(propertyState, forType).trim();
                 lines.push(`
                 if (${optionalCheck} ${propertyAccessor} !== unpopulatedSymbol) {
                     let ${checkValid} = false;
-                    ${executeTemplates(propertyState,
-                    member.kind === ReflectionKind.methodSignature || member.kind === ReflectionKind.method
-                        ? { kind: ReflectionKind.function, name: memberNameToString(member.name), return: member.return, parameters: member.parameters }
-                        : member.type
-                )}
+                    ${checkTemplate || `// no template found for member ${String(member.name)}.type.kind=${forType.kind}`}
                     if (!${checkValid}) ${state.setter} = false;
                 }`);
             }
@@ -1314,18 +1320,20 @@ export function typeGuardObjectLiteral(type: TypeObjectLiteral | TypeClass, stat
 
         for (const signature of signatures) {
             const checkValid = state.compilerContext.reserveName('check');
+            const checkTemplate = executeTemplates(state.fork(checkValid, new ContainerAccessor(state.accessor, i)).extendPath(new RuntimeCode(i)), signature.type).trim();
             signatureLines.push(`else if (${getIndexCheck(state, i, signature.index)}) {
                 let ${checkValid} = false;
-                ${executeTemplates(state.fork(checkValid, new ContainerAccessor(state.accessor, i)).extendPath(new RuntimeCode(i)), signature.type)}
+                ${checkTemplate || `// no template found for signature.type.kind=${signature.type.kind}`}
                 if (!${checkValid}) ${state.setter} = false;
             }`);
         }
 
+        state.setContext({ hasProperty });
         //the index signature type could be: string, number, symbol.
         //or a literal when it was constructed by a mapped type.
         lines.push(`
         for (const ${i} in ${state.accessor}) {
-            if (!${state.accessor}.hasOwnProperty(${i})) continue;
+            if (!hasProperty(${state.accessor}, ${i})) continue;
             if (${existingCheck}) continue;
             if (!${state.setter}) {
                 break;
@@ -1692,7 +1700,7 @@ export function handleUnion(type: TypeUnion, state: TemplateState) {
         if (false) {} ${lines.join(' ')}
         else {
             ${handleErrors}
-            ${state.assignValidationError('type', 'No valid union member found')}
+            ${state.assignValidationError('type', 'No valid union member found. Valid: ' + stringifyResolvedType(type))}
         }
         state.errors = oldErrors;
     `);
@@ -2027,7 +2035,9 @@ export class Serializer {
     protected registerTypeGuards() {
         this.typeGuards.register(1, ReflectionKind.any, (type, state) => {
             //if any is part of a union, we use register(20) below. otherwise it would match before anything else.
-            if (type.parent && type.parent.kind === ReflectionKind.union) return;
+            if (type.parent && type.parent.kind === ReflectionKind.union) {
+                return;
+            }
             state.addSetter('true');
         });
         //if nothing else matches in a union, any matches anything
@@ -2142,8 +2152,14 @@ export class Serializer {
         this.typeGuards.register(1, ReflectionKind.array, (type, state) => typeGuardArray(type.type, state));
         this.typeGuards.register(1, ReflectionKind.tuple, typeGuardTuple);
         this.typeGuards.register(1, ReflectionKind.literal, (type, state) => {
-            const v = state.setVariable('v', type.literal);
-            state.addSetterAndReportErrorIfInvalid('type', 'Invalid literal', `${v} === ${state.accessor}`);
+            state.addSetterAndReportErrorIfInvalid('type', 'Invalid literal', `${state.setVariable('v', type.literal)} === ${state.accessor}`);
+        });
+
+        this.typeGuards.register(-0.5, ReflectionKind.literal, (type, state) => {
+            //loosely only works for number/bigint/boolean, not for symbols/regexp/string
+            if (type.literal === null || type.literal === undefined || typeof type.literal === 'number' || typeof type.literal === 'bigint' || typeof type.literal === 'boolean') {
+                state.addSetter(`'string' === typeof ${state.accessor} && ${state.setVariable('v', String(type.literal))} === ${state.accessor}`);
+            }
         });
 
         this.typeGuards.register(1, ReflectionKind.regexp, ((type, state) => state.addSetterAndReportErrorIfInvalid('type', 'Not a RegExp', `${state.accessor} instanceof RegExp`)));
@@ -2211,7 +2227,7 @@ export class Serializer {
                             let error = ${validatorVar}(${state.originalAccessor}, ${state.compilerContext.reserveConst(type, 'type')}, ${optionVar ? optionVar : 'undefined'});
                             if (error) {
                                 ${state.setter} = false;
-                                if (state.errors) state.errors.push(new ValidationErrorItem(${collapsePath(state.path)}, error.code, error.message));
+                                if (state.errors) state.errors.push(new ValidationErrorItem(${collapsePath(state.path)}, error.code, error.message, ${state.originalAccessor}));
                             }
                         }
                     `);
@@ -2225,7 +2241,7 @@ export class Serializer {
                                 let error = ${validatorVar}(${state.originalAccessor}, ${state.compilerContext.reserveConst(type, 'type')});
                                 if (error) {
                                     ${state.setter} = false;
-                                    if (state.errors) state.errors.push(new ValidationErrorItem(${collapsePath(state.path)}, error.code, error.message));
+                                    if (state.errors) state.errors.push(new ValidationErrorItem(${collapsePath(state.path)}, error.code, error.message, ${state.originalAccessor}));
                                 }
                             }
                         `);

@@ -9,6 +9,7 @@
     "declaration": true,
     "strict": true,
     "target": "es2015",
+    "noImplicitAny": true,
     "esModuleInterop": true,
     "typeRoots": [
       "node_modules/@types"
@@ -38,6 +39,12 @@
     },
     {
       "path": "../core-rxjs/tsconfig.json"
+    },
+    {
+      "path": "../event/tsconfig.json"
+    },
+    {
+      "path": "../type/tsconfig.json"
     }
   ]
 }

@@ -37,7 +37,7 @@ import { AppConfigController } from './cli/app-config.js';
 import { Zone } from './zone.js';
 import { DebugBroker, DebugBrokerListener } from './debug/broker.js';
 import { ApiConsoleModule } from '@deepkit/api-console-module';
-import { AppModule, createModule } from '@deepkit/app';
+import { AppModule, ControllerConfig, createModule } from '@deepkit/app';
 import { RpcControllers, RpcInjectorContext, RpcKernelWithStopwatch } from './rpc.js';
 import { normalizeDirectory } from './utils.js';
 
@@ -50,15 +50,14 @@ export class FrameworkModule extends createModule({
         RpcServer,
         ConsoleTransport,
         Logger,
-        RpcKernelSecurity,
         MigrationProvider,
         DebugController,
         { provide: DatabaseRegistry, useFactory: (ic: InjectorContext) => new DatabaseRegistry(ic) },
         {
             provide: RpcKernel,
-            useFactory(rpcControllers: RpcControllers, injectorContext: InjectorContext, rpcKernelSecurity: RpcKernelSecurity, logger: LoggerInterface, stopwatch?: Stopwatch) {
+            useFactory(rpcControllers: RpcControllers, injectorContext: InjectorContext, logger: LoggerInterface, stopwatch?: Stopwatch) {
                 const classType = stopwatch ? RpcKernelWithStopwatch : RpcKernel;
-                const kernel: RpcKernel = new classType(injectorContext, rpcKernelSecurity, logger.scoped('rpc'));
+                const kernel: RpcKernel = new classType(injectorContext, logger.scoped('rpc'));
 
                 if (kernel instanceof RpcKernelWithStopwatch) {
                     kernel.stopwatch = stopwatch;
@@ -76,6 +75,7 @@ export class FrameworkModule extends createModule({
         { provide: SessionHandler, scope: 'http' },
 
         // { provide: LiveDatabase, scope: 'rpc' },
+        { provide: RpcKernelSecurity, scope: 'rpc' },
 
         //all of these will be set on scope creation
         { provide: HttpRequest, scope: 'rpc', useValue: undefined },
@@ -110,7 +110,6 @@ export class FrameworkModule extends createModule({
         WebWorkerFactory,
         RpcServer,
         ConsoleTransport,
-        Logger,
         RpcKernelSecurity,
         RpcKernel,
         MigrationProvider,
@@ -148,11 +147,11 @@ export class FrameworkModule extends createModule({
             this.addListener(HttpLogger);
         }
 
+        this.getImportedModuleByClass(HttpModule).configure({ parser: this.config.httpParse });
+
         if (this.config.publicDir) {
             this.addListener(serveStaticListener(this, normalizeDirectory(this.config.publicDirPrefix), this.config.publicDir));
         }
-
-        this.setupProvider<Logger>().addTransport(injectorReference(ConsoleTransport));
 
         if (this.config.debug) {
             mkdirSync(join(this.config.varPath, this.config.debugStorePath), { recursive: true });
@@ -214,7 +213,10 @@ export class FrameworkModule extends createModule({
         }
     }
 
-    processController(module: AppModule<any>, controller: ClassType) {
+    processController(module: AppModule<any>, config: ControllerConfig) {
+        const controller = config.controller;
+        if (!controller) return;
+
         const rpcConfig = rpcClass._fetch(controller);
         if (!rpcConfig) return;
 

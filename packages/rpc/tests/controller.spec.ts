@@ -5,7 +5,8 @@ import { getActions, rpc } from '../src/decorators.js';
 import { RpcKernel, RpcKernelConnection } from '../src/server/kernel.js';
 import { Session, SessionState } from '../src/server/security.js';
 import { BehaviorSubject } from 'rxjs';
-import { getClassName } from '@deepkit/core';
+import { getClassName, sleep } from '@deepkit/core';
+import { ProgressTracker } from '@deepkit/core-rxjs';
 
 test('decorator', async () => {
     @rpc.controller('name')
@@ -453,5 +454,133 @@ test('disable type reuse', async () => {
         const res = await controller.testDeep();
         expect(res.items[0]).not.toBeInstanceOf(Model);
         expect(res.items[0]).toEqual({ title: '123' });
+    }
+});
+
+test('progress tracker', async () => {
+    class Controller {
+        progress = new ProgressTracker();
+        tracker = this.progress.track('test', 10);
+
+        @rpc.action()
+        async getProgress(): Promise<ProgressTracker> {
+            return this.progress;
+        }
+
+        @rpc.action()
+        increase(): void {
+            this.tracker.done++;
+        }
+
+        @rpc.action()
+        done(): void {
+            this.tracker.done = 10;
+        }
+    }
+
+    const kernel = new RpcKernel();
+    kernel.registerController(Controller, 'myController');
+
+    const client = new DirectClient(kernel);
+    client.disableTypeReuse();
+    const controller = client.controller<Controller>('myController');
+
+    {
+        const res = await controller.getProgress();
+        expect(res).toBeInstanceOf(ProgressTracker);
+        expect(res.progress).toEqual(0);
+        expect(res.done).toEqual(0);
+        expect(res.total).toEqual(10);
+
+        await controller.increase();
+        await sleep(0.1);
+        expect(res.done).toEqual(1);
+        expect(res.total).toEqual(10);
+
+        await controller.done();
+        await sleep(0.1);
+        expect(res.done).toEqual(10);
+        expect(res.finished).toEqual(true);
+        expect(res.total).toEqual(10);
+    }
+});
+
+test('progress tracker stop', async () => {
+    let stopCalled = false;
+
+    class Controller {
+        @rpc.action()
+        async getProgress(): Promise<ProgressTracker> {
+            const tracker = new ProgressTracker();
+            const test1 = tracker.track('test1', 1000);
+
+            const int = setInterval(() => {
+                test1.done++;
+            }, 10);
+
+            test1.onStop(() => {
+                stopCalled = true;
+                clearInterval(int);
+            });
+
+            return tracker;
+        }
+    }
+
+    const kernel = new RpcKernel();
+    kernel.registerController(Controller, 'myController');
+
+    const client = new DirectClient(kernel);
+    client.disableTypeReuse();
+    const controller = client.controller<Controller>('myController');
+
+    {
+        const res = await controller.getProgress();
+        expect(res).toBeInstanceOf(ProgressTracker);
+        expect(res.done).toEqual(0);
+        expect(res.total).toEqual(1000);
+        await sleep(0.1);
+        expect(res.done).toBeGreaterThan(0);
+        expect(res.done).toBeLessThan(50);
+        res.stop();
+        await sleep(0.1);
+        expect(stopCalled).toBe(true);
+        expect(res.done).toBeLessThan(50);
+        expect(res.finished).toBe(false);
+        expect(res.stopped).toBe(true);
+        expect(res.ended).toBe(true);
+    }
+});
+
+test('progress tracker reuse', async () => {
+    class Controller {
+        trackers = [new ProgressTracker()];
+
+        constructor() {
+            const track = this.trackers[0].track('test', 10);
+            track.done = 5;
+        }
+
+        @rpc.action()
+        getProgress(id: number): ProgressTracker | undefined {
+            return this.trackers[id];
+        }
+    }
+
+    const kernel = new RpcKernel();
+    kernel.registerController(Controller, 'myController');
+    const client = new DirectClient(kernel);
+    const controller = client.controller<Controller>('myController');
+
+    {
+        const res = await controller.getProgress(0);
+        expect(res).toBeInstanceOf(ProgressTracker);
+        expect(res!.total).toBe(10);
+        expect(res!.done).toBe(5);
+    }
+
+    {
+        const res = await controller.getProgress(1);
+        expect(res).toBe(undefined);
     }
 });

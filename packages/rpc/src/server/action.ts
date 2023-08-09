@@ -9,7 +9,7 @@
  */
 
 import { ClassType, collectForMicrotask, getClassName, isPrototypeOfBase, toFastProperties } from '@deepkit/core';
-import { isBehaviorSubject, isSubject } from '@deepkit/core-rxjs';
+import { isBehaviorSubject, isSubject, ProgressTracker, ProgressTrackerState } from '@deepkit/core-rxjs';
 import {
     assertType,
     findMember,
@@ -182,7 +182,16 @@ export class RpcServerAction {
             unwrappedReturnType = unwrappedReturnType.type;
         }
 
-        let type: Type = unwrappedReturnType;
+        const fullType = unwrappedReturnType;
+        if (unwrappedReturnType.kind === ReflectionKind.union) {
+            //if e.g. Subject | undefined, we take the non-undefined type
+            const nonNullUndefined = unwrappedReturnType.types.filter(v => v.kind !== ReflectionKind.undefined && v.kind !== ReflectionKind.null);
+            if (nonNullUndefined.length === 1) {
+                unwrappedReturnType = nonNullUndefined[0];
+            }
+        }
+
+        let type: Type = fullType;
         let collectionSchema: Type | undefined;
         let collectionQueryModel: Type | undefined;
 
@@ -205,6 +214,24 @@ export class RpcServerAction {
             } else if (isPrototypeOfBase(unwrappedReturnType.classType, EntitySubject)) {
                 mode = 'entitySubject';
                 type = unwrappedReturnType.typeArguments ? unwrappedReturnType.typeArguments[0] : { kind: ReflectionKind.any };
+            } else if (isPrototypeOfBase(unwrappedReturnType.classType, ProgressTracker)) {
+                mode = 'observable';
+                type = typeOf<ProgressTrackerState[] | undefined>();
+                nextSchema = {
+                    kind: ReflectionKind.objectLiteral,
+                    types: [{
+                        kind: ReflectionKind.propertySignature,
+                        name: 'id',
+                        parent: Object as any,
+                        type: { kind: ReflectionKind.number },
+                    }, {
+                        kind: ReflectionKind.propertySignature,
+                        name: 'v',
+                        parent: Object as any,
+                        optional: true,
+                        type: type,
+                    }]
+                };
             } else if (isPrototypeOfBase(unwrappedReturnType.classType, Observable)) {
                 mode = 'observable';
                 type = unwrappedReturnType.typeArguments ? unwrappedReturnType.typeArguments[0] : { kind: ReflectionKind.any };
@@ -248,6 +275,9 @@ export class RpcServerAction {
             collectionSchema,
             collectionQueryModel,
         };
+        if (!types.type) {
+            throw new Error(`No type detected for action ${controller}.${methodName}`);
+        }
         toFastProperties(this.cachedActionsTypes);
 
         return types;
@@ -341,6 +371,13 @@ export class RpcServerAction {
                 subject.completedByClient = true;
                 subject.subject.complete();
                 delete this.observableSubjects[message.id];
+                break;
+            }
+
+            case RpcTypes.ActionObservableProgressNext: { //ProgressTracker changes from client (e.g. stop signal)
+                const observable = this.observables[message.id];
+                if (!observable || !(observable.observable instanceof ProgressTracker)) return response.error(new Error('No observable ProgressTracker to sync found'));
+                observable.observable.next(message.parseBody<ProgressTrackerState[]>());
                 break;
             }
         }
@@ -443,6 +480,13 @@ export class RpcServerAction {
                 if (isSubject(result)) {
                     type = ActionObservableTypes.subject;
 
+                    if (isBehaviorSubject(result)) {
+                        type = ActionObservableTypes.behaviorSubject;
+                        if (result instanceof ProgressTracker) {
+                            type = ActionObservableTypes.progressTracker;
+                        }
+                    }
+
                     this.observableSubjects[message.id] = {
                         subject: result,
                         completedByClient: false,
@@ -462,10 +506,6 @@ export class RpcServerAction {
                             });
                         })
                     };
-
-                    if (isBehaviorSubject(result)) {
-                        type = ActionObservableTypes.behaviorSubject;
-                    }
                 }
 
                 response.reply<rpcResponseActionObservable>(RpcTypes.ResponseActionObservable, { type });

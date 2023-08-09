@@ -1,5 +1,5 @@
 import { expect, test } from '@jest/globals';
-import { Logger, LoggerLevel, ScopeFormatter } from '../src/logger.js';
+import { JSONTransport, Logger, LoggerLevel, ScopeFormatter } from '../src/logger.js';
 import { MemoryLoggerTransport } from '../src/memory-logger.js';
 
 test('log level', () => {
@@ -34,12 +34,14 @@ test('log message', () => {
 test('log scope', () => {
     const memory = new MemoryLoggerTransport();
     const logger = new Logger([memory], [new ScopeFormatter()]);
+    logger.level = LoggerLevel.error;
 
     const scoped = logger.scoped('database');
 
-    scoped.log('Peter');
+    scoped.error('Peter');
 
     expect(memory.messageStrings).toEqual(['(database) Peter']);
+    expect(scoped.level).toBe(LoggerLevel.error);
 });
 
 test('log data', () => {
@@ -63,4 +65,17 @@ test('log data', () => {
     logger.log({ user: new User });
 
     expect(memory.messages[0].message).toEqual('{ user: User {} }');
+});
+
+test('colorless', () => {
+    const jsonLogger = new JSONTransport();
+    jsonLogger.out = {
+        write: (message: string) => {
+            expect(message).toContain(`This is a color test`);
+        }
+    };
+
+    const logger = new Logger([jsonLogger]);
+
+    logger.log('This is a <yellow>color</yellow> test');
 });

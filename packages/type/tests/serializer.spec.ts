@@ -8,7 +8,7 @@
  * You should have received a copy of the MIT License along with this program.
  */
 import { expect, test } from '@jest/globals';
-import { reflect, ReflectionClass, typeOf } from '../src/reflection/reflection.js';
+import { reflect, ReflectionClass, ReflectionFunction, typeOf } from '../src/reflection/reflection.js';
 import {
     assertType,
     AutoIncrement,
@@ -20,10 +20,13 @@ import {
     int8,
     integer,
     MapName,
+    metaAnnotation,
     PrimaryKey,
     Reference,
     ReflectionKind,
     SignedBinaryBigInt,
+    stringifyResolvedType,
+    Type,
     TypeProperty,
     TypePropertySignature
 } from '../src/reflection/type.js';
@@ -34,8 +37,10 @@ import { entity, t } from '../src/decorator.js';
 import { Alphanumeric, MaxLength, MinLength, ValidationError } from '../src/validator.js';
 import { StatEnginePowerUnit, StatWeightUnit } from './types.js';
 import { parametersToTuple } from '../src/reflection/extends.js';
-import { is } from '../src/typeguard.js';
+import { getValidatorFunction, is } from '../src/typeguard.js';
 import { isReferenceInstance } from '../src/reference.js';
+import { ChangesInterface, DeepPartial } from '../src/changes.js';
+import { inspect } from 'util';
 
 test('deserializer', () => {
     class User {
@@ -176,6 +181,26 @@ test('optional default value', () => {
         const user = cast<User>({ logins: undefined });
         expect(user).toEqual({
             logins: undefined
+        });
+    }
+});
+
+test('optional literal', () => {
+    interface LoginInput {
+        mechanism?: 'cookie';
+    }
+
+    {
+        const input = cast<LoginInput>({});
+        expect(input).toEqual({
+            mechanism: undefined
+        });
+    }
+
+    {
+        const input = cast<LoginInput>({ mechanism: 'cookie' });
+        expect(input).toEqual({
+            mechanism: 'cookie'
         });
     }
 });
@@ -1122,4 +1147,52 @@ test('patch', () => {
         const data = patch<Order>({ id: 5, 'shippingAddress.additional.randomName': 12 }, undefined, undefined, underscoreNamingStrategy);
         expect(data).toEqual({ id: 5, 'shipping_address.additional.randomName': '12' });
     }
+});
+
+test('extend with custom type', () => {
+    type StringifyTransport = { __meta?: ['stringifyTransport'] };
+
+    function isStringifyTransportType(type: Type): boolean {
+        return !!metaAnnotation.getForName(type, 'stringifyTransport');
+    }
+
+    serializer.serializeRegistry.addPostHook((type, state) => {
+        if (!isStringifyTransportType(type)) return;
+        state.addSetter(`JSON.stringify(${state.accessor})`);
+    });
+    serializer.deserializeRegistry.addPreHook((type, state) => {
+        if (!isStringifyTransportType(type)) return;
+        state.addSetter(`JSON.parse(${state.accessor})`);
+    });
+
+    class MyType {
+        test!: string;
+    }
+
+    class Entity {
+        obj: MyType & StringifyTransport = { test: 'abc' };
+    }
+
+    const e = new Entity();
+    const s = serialize<Entity>(e, undefined, serializer);
+    expect(s.obj).toBe('{"test":"abc"}');
+    const d = deserialize<Entity>(s, undefined, serializer);
+    expect(d.obj).toEqual({ test: 'abc' });
+});
+
+test('issue-415: serialize literal types in union', () => {
+    enum MyEnum {
+        VALUE_0 = 0,
+        VALUE_180 = 180
+    }
+
+    class Data {
+        rotate: MyEnum.VALUE_180 | MyEnum.VALUE_0 = MyEnum.VALUE_0;
+    }
+
+    expect(deserialize<Data>({ rotate: 0 }, { loosely: true }).rotate).toBe(0);
+    expect(deserialize<Data>({ rotate: '0' }, { loosely: true }).rotate).toBe(0);
+    expect(deserialize<Data>({ rotate: 180 }, { loosely: true }).rotate).toBe(180);
+    expect(deserialize<Data>({ rotate: '180' }, { loosely: true }).rotate).toBe(180);
+    expect(deserialize<Data>({ rotate: 123456 }, { loosely: true }).rotate).toBe(0);
 });

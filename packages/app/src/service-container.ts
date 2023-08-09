@@ -9,15 +9,24 @@
  */
 
 import { ClassType, getClassName, isClass, isFunction } from '@deepkit/core';
-import { EventDispatcher } from '@deepkit/event';
-import { AppModule, ConfigurationInvalidError, MiddlewareConfig, ModuleDefinition } from './module.js';
+import { EventDispatcher, EventListenerRegistered, isEventListenerContainerEntryCallback } from '@deepkit/event';
+import { AddedListener, AppModule, ConfigurationInvalidError, MiddlewareConfig, ModuleDefinition } from './module.js';
 import { Injector, InjectorContext, InjectorModule, isProvided, ProviderWithScope, resolveToken, Token } from '@deepkit/injector';
 import { cli } from './command.js';
 import { WorkflowDefinition } from '@deepkit/workflow';
-import { deserialize, ReflectionClass, validate } from '@deepkit/type';
+import { deserialize, ReflectionClass, ReflectionFunction, validate } from '@deepkit/type';
+import { ConsoleTransport, Logger } from '@deepkit/logger';
+
+export interface ControllerConfig {
+    controller?: ClassType,
+    name?: string;
+    for?: string; //e.g. cli
+    callback?: Function,
+    module: InjectorModule
+}
 
 export class CliControllerRegistry {
-    public readonly controllers = new Map<string, { controller: ClassType, module: InjectorModule }>();
+    public readonly controllers = new Map<string, ControllerConfig>();
 }
 
 export type MiddlewareRegistryEntry = { config: MiddlewareConfig, module: AppModule<any> };
@@ -86,6 +95,7 @@ export class ServiceContainer {
         this.appModule.addProvider({ provide: CliControllerRegistry, useValue: this.cliControllerRegistry });
         this.appModule.addProvider({ provide: MiddlewareRegistry, useValue: this.middlewareRegistry });
         this.appModule.addProvider({ provide: InjectorContext, useFactory: () => this.injectorContext! });
+        this.appModule.addProvider({ provide: Logger, useFactory: () => new Logger([new ConsoleTransport()]) });
 
         this.processModule(this.appModule);
 
@@ -200,6 +210,7 @@ export class ServiceContainer {
 
         const providers = module.getProviders();
         const controllers = module.getControllers();
+        const commands = module.getCommands();
         const listeners = module.getListeners();
         const middlewares = module.getMiddlewares();
 
@@ -221,21 +232,29 @@ export class ServiceContainer {
             this.middlewareRegistry.configs.push({ config, module });
         }
 
-        for (const listener of listeners) {
-            if (isClass(listener)) {
-                providers.unshift({ provide: listener });
-                this.eventDispatcher.registerListener(listener, module);
-            } else {
-                this.eventDispatcher.add(listener.eventToken, { fn: listener.callback, order: listener.order, module: listener.module || module });
-            }
+        for (const controller of controllers) {
+            this.processController(module, { module, controller });
         }
 
-        for (const controller of controllers) {
-            this.processController(module, controller);
+        for (const command of commands) {
+            this.processController(module, { module, for: 'cli', ...command });
         }
 
         for (const provider of providers) {
             this.processProvider(module, resolveToken(provider), provider);
+        }
+
+        for (const listener of listeners) {
+            if (isClass(listener)) {
+                providers.unshift({ provide: listener });
+                for (const listenerEntry of this.eventDispatcher.registerListener(listener, module)) {
+                    this.processListener(module, listenerEntry);
+                }
+            } else {
+                const listenerObject = { fn: listener.callback, order: listener.order, module: listener.module || module };
+                this.eventDispatcher.add(listener.eventToken, listenerObject);
+                this.processListener(module, { eventToken: listener.eventToken, listener: listenerObject });
+            }
         }
 
         for (const imp of module.getImports()) {
@@ -244,11 +263,35 @@ export class ServiceContainer {
         }
     }
 
-    protected processController(module: AppModule<any>, controller: ClassType) {
-        const cliConfig = cli._fetch(controller);
-        if (cliConfig) {
-            if (!module.isProvided(controller)) module.addProvider({ provide: controller, scope: 'cli' });
-            this.cliControllerRegistry.controllers.set(cliConfig.name, { controller, module });
+    protected processListener(module: AppModule<any>, listener: EventListenerRegistered) {
+        const addedListener: AddedListener = {
+            eventToken: listener.eventToken,
+            reflection: isEventListenerContainerEntryCallback(listener.listener)
+                ? ReflectionFunction.from(listener.listener.fn) : ReflectionClass.from(listener.listener.classType).getMethod(listener.listener.methodName),
+            module: listener.listener.module,
+            order: listener.listener.order,
+        };
+        for (const m of this.modules) {
+            m.processListener(module, addedListener);
+        }
+    }
+
+    protected processController(module: AppModule<any>, controller: ControllerConfig) {
+        let name = controller.name || '';
+        if (controller.controller) {
+            if (!name) {
+                const cliConfig = cli._fetch(controller.controller);
+                if (cliConfig) {
+                    name = cliConfig.name || '';
+                    //make sure CLI controllers are provided in cli scope
+                    if (!module.isProvided(controller.controller)) {
+                        module.addProvider({ provide: controller.controller, scope: 'cli' });
+                    }
+                    this.cliControllerRegistry.controllers.set(name, controller);
+                }
+            }
+        } else if (controller.for === 'cli') {
+            this.cliControllerRegistry.controllers.set(name, controller);
         }
 
         for (const m of this.modules) {

@@ -51,9 +51,11 @@ export class ConsoleTransport implements LoggerTransport {
 }
 
 export class JSONTransport implements LoggerTransport {
+    out: {write: (v: string) => any} = process.stdout;
+
     write(message: LogMessage) {
-        process.stdout.write(JSON.stringify({
-            message: message.rawMessage,
+        this.out.write(JSON.stringify({
+            message: message.message,
             level: message.level,
             date: message.date,
             scope: message.scope,
@@ -213,7 +215,9 @@ export class Logger implements LoggerInterface {
     }
 
     scoped(name: string): Logger {
-        return this.scopes[name] ||= new (this.constructor as any)(this.transporter, this.formatter, name);
+        const scopedLogger = (this.scopes[name] ||= new (this.constructor as any)(this.transporter, this.formatter, name));
+        scopedLogger.level = this.level;
+        return scopedLogger;
     }
 
     addTransport(transport: LoggerTransport) {

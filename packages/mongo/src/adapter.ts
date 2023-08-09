@@ -94,7 +94,7 @@ export class MongoDatabaseAdapter extends DatabaseAdapter {
     async migrate(entityRegistry: DatabaseEntityRegistry) {
         await this.client.connect(); //manually connect to catch connection errors
         let withOrmSequences = true;
-        for (const schema of entityRegistry.entities) {
+        for (const schema of entityRegistry.forMigration()) {
             await this.migrateClassSchema(schema);
             for (const property of schema.getProperties()) {
                 if (property.isAutoIncrement()) withOrmSequences = true;
@@ -125,11 +125,14 @@ export class MongoDatabaseAdapter extends DatabaseAdapter {
 
             const indexName = index.options.name || index.names.join('_');
             const createIndex: CreateIndex = {
-                name: index.options.name || index.names.join('_'),
+                name: indexName,
                 key: fields,
                 unique: !!index.options.unique,
                 sparse: !!index.options.sparse,
             };
+            if (index.options.expireAfterSeconds) {
+                createIndex.expireAfterSeconds = Number(index.options.expireAfterSeconds);
+            }
 
             try {
                 await this.client.execute(new CreateIndexesCommand(schema, [createIndex]));

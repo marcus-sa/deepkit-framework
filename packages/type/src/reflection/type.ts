@@ -66,6 +66,8 @@ export enum ReflectionKind {
     methodSignature,
 
     infer,
+
+    callSignature,
 }
 
 export type TypeDecorator = (annotations: Annotations, decorator: TypeObjectLiteral) => boolean;
@@ -250,7 +252,7 @@ export interface TypeParameter extends TypeAnnotations {
     kind: ReflectionKind.parameter,
     name: string;
     type: Type;
-    parent: TypeFunction | TypeMethod | TypeMethodSignature;
+    parent: TypeFunction | TypeMethod | TypeMethodSignature | TypeCallSignature;
 
     //parameter could be a property as well if visibility is set
     visibility?: ReflectionVisibility,
@@ -290,6 +292,13 @@ export interface TypeFunction extends TypeAnnotations {
     parent?: Type;
     name?: number | string | symbol,
     function?: Function; //reference to the real function if available
+    parameters: TypeParameter[];
+    return: Type;
+}
+
+export interface TypeCallSignature extends TypeAnnotations {
+    kind: ReflectionKind.callSignature,
+    parent?: Type;
     parameters: TypeParameter[];
     return: Type;
 }
@@ -388,7 +397,7 @@ export interface TypeMethodSignature extends TypeAnnotations {
 export interface TypeObjectLiteral extends TypeAnnotations {
     kind: ReflectionKind.objectLiteral,
     parent?: Type;
-    types: (TypeIndexSignature | TypePropertySignature | TypeMethodSignature)[];
+    types: (TypeIndexSignature | TypePropertySignature | TypeMethodSignature | TypeCallSignature)[];
 }
 
 export interface TypeIndexSignature extends TypeAnnotations {
@@ -464,6 +473,7 @@ export type Type =
     | TypeTupleMember
     | TypeRest
     | TypeRegexp
+    | TypeCallSignature
     ;
 
 export type Widen<T> =
@@ -1089,7 +1099,7 @@ export function indexAccess(container: Type, index: Type): Type {
             return { kind: ReflectionKind.never };
         }
     } else if (container.kind === ReflectionKind.any) {
-        return container;
+        return { kind: ReflectionKind.any };
     }
     return { kind: ReflectionKind.never };
 }
@@ -1653,8 +1663,44 @@ export function hasEmbedded(type: Type): boolean {
 }
 
 //`never` is here to allow using a decorator multiple times on the same type without letting the TS complaining about incompatible types.
+
+/**
+ * Assigns one or multiple groups to a type.
+ *
+ * @example
+ * ```typescript
+ * interface User {
+ *     username: string;
+ *     password: string & Group<'credentials'>;
+ * }
+ * ```
+ */
 export type Group<Name extends string> = { __meta?: ['group', never & Name] };
+
+/**
+ * Excludes the type from serialization of all kind.
+ *
+ * @example
+ * ```typescript
+ * interface User {
+ *    username: string;
+ *    password: string & Excluded;
+ *  }
+ *  ```
+ */
 export type Excluded<Name extends string = '*'> = { __meta?: ['excluded', never & Name] };
+
+/**
+ * Assigns arbitrary data to a type that can be read in runtime.
+ *
+ * @example
+ * ```typescript
+ * interface User {
+ *   username: string;
+ *   password: string & Data<'role', 'admin'>;
+ * }
+ * ```
+ */
 export type Data<Name extends string, Value> = { __meta?: ['data', never & Name, never & Value] };
 
 /**
@@ -1684,6 +1730,8 @@ export type IndexOptions = {
     //only in mongodb
     fulltext?: boolean,
     where?: string,
+
+    expireAfterSeconds?: number,
 };
 
 export type Unique<Options extends IndexOptions = {}> = { __meta?: ['index', never & Options & { unique: true }] };
@@ -2044,7 +2092,7 @@ export function isCustomTypeClass(type: Type) {
 /**
  * Returns the members of a class or object literal.
  */
-export function resolveTypeMembers(type: TypeClass | TypeObjectLiteral): (TypeProperty | TypePropertySignature | TypeMethodSignature | TypeMethod | TypeIndexSignature)[] {
+export function resolveTypeMembers(type: TypeClass | TypeObjectLiteral): (TypeProperty | TypePropertySignature | TypeMethodSignature | TypeMethod | TypeIndexSignature | TypeCallSignature)[] {
     return type.types;
 }
 
@@ -2384,6 +2432,7 @@ export function stringifyType(type: Type, stateIn: Partial<StringifyTypeOptions>
                     stack.push({ type: type.type, depth: depth + 1 });
                     break;
                 }
+                case ReflectionKind.callSignature:
                 case ReflectionKind.function:
                     stack.push({ type: type.return, depth: depth + 1 });
                     stack.push({ before: ') => ' });

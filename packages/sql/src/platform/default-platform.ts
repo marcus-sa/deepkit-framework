@@ -24,9 +24,9 @@ import {
     ReflectionKind,
     ReflectionProperty,
     resolvePath,
+    resolveProperty,
     Serializer,
-    Type,
-    resolveProperty
+    Type
 } from '@deepkit/type';
 import { DatabaseEntityRegistry } from '@deepkit/orm';
 import { splitDotPath } from '../sql-adapter.js';
@@ -276,7 +276,7 @@ export abstract class DefaultPlatform {
 
         const refs = new Map<ReflectionClass<any>, ReflectionClass<any>>();
 
-        for (let schema of entityRegistry.entities) {
+        for (let schema of entityRegistry.forMigration()) {
             //a parent of a single-table inheritance might already be added
             if (mergedToSingleTable.has(schema)) continue;
 
@@ -499,6 +499,10 @@ export abstract class DefaultPlatform {
         return `ALTER TABLE ${this.getIdentifier(from)} RENAME TO ${this.getIdentifier(to)}`;
     }
 
+    supportsAggregatedAlterTable(): boolean {
+        return true;
+    }
+
     getModifyTableDDL(diff: TableDiff): string[] {
         const ddl: string[] = [];
 
@@ -513,13 +517,13 @@ export abstract class DefaultPlatform {
 
         const prefix = `ALTER TABLE ${this.getIdentifier(diff.to)}`;
 
-        function add(value: string) {
-            if (value.trim().startsWith(prefix)) {
+        const add = (value: string) => {
+            if (this.supportsAggregatedAlterTable() && value.trim().startsWith(prefix)) {
                 alterTableLines.push(value.trim().substr(prefix.length));
             } else {
                 ddl.push(value);
             }
-        }
+        };
 
         // alter entity structure
         if (diff.hasModifiedPk()) add(this.getDropPrimaryKeyDDL(diff.from));
@@ -666,11 +670,18 @@ export abstract class DefaultPlatform {
     }
 
     getColumnDefaultValueDDL(column: Column) {
+        if (column.defaultExpression !== undefined || column.defaultValue !== undefined) {
+            return 'DEFAULT ' + this.getDefaultExpression(column);
+        }
+        return '';
+    }
+
+    getDefaultExpression(column: Column): string {
         if (column.defaultExpression !== undefined) {
-            return 'DEFAULT ' + column.defaultExpression;
+            return column.defaultExpression;
         }
         if (column.defaultValue !== undefined) {
-            return 'DEFAULT ' + this.quoteValue(column.defaultValue);
+            return this.quoteValue(column.defaultValue);
         }
         return '';
     }

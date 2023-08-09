@@ -75,13 +75,13 @@ export class DatabaseRegistry {
     }
 
     public onShutDown() {
+        this.init();
         for (const database of this.databaseMap.values()) {
             database.disconnect();
         }
     }
 
     public addDatabase(database: ClassType, options: { migrateOnStartup?: boolean } = {}, module: InjectorModule<any>) {
-
         if (!this.databaseTypes.find(v => v.classType === database)) {
             this.databaseTypes.push({ classType: database, module });
         }
@@ -118,7 +118,7 @@ export class DatabaseRegistry {
 
             const database = this.injectorContext.get(databaseType.classType);
 
-            for (const classSchema of database.entityRegistry.entities) {
+            for (const classSchema of database.entityRegistry.all()) {
                 classSchema.data['orm.database'] = database;
             }
 

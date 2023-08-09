@@ -8,7 +8,7 @@
  * You should have received a copy of the MIT License along with this program.
  */
 
-import { Column, DefaultPlatform, IndexModel, isSet, SqlPlaceholderStrategy, Table } from '@deepkit/sql';
+import { Column, ColumnDiff, DefaultPlatform, IndexModel, isSet, SqlPlaceholderStrategy, Table } from '@deepkit/sql';
 import { postgresSerializer } from './postgres-serializer.js';
 import { isUUIDType, ReflectionClass, ReflectionKind, ReflectionProperty, Serializer, TypeNumberBrand } from '@deepkit/type';
 import { PostgresSchemaParser } from './postgres-schema-parser.js';
@@ -117,10 +117,8 @@ export class PostgresPlatform extends DefaultPlatform {
         return escapeLiteral(value);
     }
 
-    override getColumnDDL(column: Column) {
+    protected getColumnType(column: Column): string {
         const ddl: string[] = [];
-
-        ddl.push(this.getIdentifier(column));
         if (column.isAutoIncrement) {
             ddl.push(`SERIAL`);
         } else {
@@ -136,7 +134,17 @@ export class PostgresPlatform extends DefaultPlatform {
             } else {
                 ddl.push((column.type || 'INTEGER') + column.getSizeDefinition());
             }
+        }
+        return ddl.filter(isSet).join(' ');
+    }
 
+    override getColumnDDL(column: Column) {
+        const ddl: string[] = [];
+
+        ddl.push(this.getIdentifier(column));
+        ddl.push(this.getColumnType(column));
+
+        if (!column.isAutoIncrement) {
             ddl.push(column.isNotNull ? this.getNotNullString() : this.getNullString());
             ddl.push(this.getColumnDefaultValueDDL(column));
         }
@@ -144,15 +152,55 @@ export class PostgresPlatform extends DefaultPlatform {
         return ddl.filter(isSet).join(' ');
     }
 
+    getModifyColumnDDL(diff: ColumnDiff): string {
+        // postgres doesn't support multiple column modifications in one ALTER TABLE statement
+        // see https://www.postgresql.org/docs/current/sql-altertable.html
+
+        const lines: string[] = [];
+
+        const identifier = this.getIdentifier(diff.to);
+
+        if (diff.from.type !== diff.to.type || diff.from.isAutoIncrement !== diff.to.isAutoIncrement) {
+            lines.push(`ALTER TABLE ${this.getIdentifier(diff.to.table)} ALTER ${identifier} TYPE ${this.getColumnType(diff.to)}`);
+        }
+
+        if (diff.from.isNotNull !== diff.to.isNotNull) {
+            if (diff.to.defaultExpression !== undefined || diff.to.defaultValue !== undefined) {
+                lines.push(`ALTER TABLE ${this.getIdentifier(diff.to.table)} ALTER ${identifier} SET ${this.getColumnDefaultValueDDL(diff.to)}`);
+            } else {
+                lines.push(`ALTER TABLE ${this.getIdentifier(diff.to.table)} ALTER ${identifier} DROP DEFAULT`);
+            }
+        }
+
+        if (diff.from.isNotNull !== diff.to.isNotNull) {
+            if (diff.to.isNotNull) {
+                //NOT NULL is newly added, so we need to update all existing rows to have a value
+                const defaultExpression = this.getDefaultExpression(diff.to);
+                if (defaultExpression) {
+                    lines.push(`UPDATE ${this.getIdentifier(diff.to.table)} SET ${identifier} = ${defaultExpression} WHERE ${identifier} IS NULL`);
+                }
+                lines.push(`ALTER TABLE ${this.getIdentifier(diff.to.table)} ALTER ${identifier} SET NOT NULL`);
+            } else {
+                lines.push(`ALTER TABLE ${this.getIdentifier(diff.to.table)} ALTER ${identifier} DROP NOT NULL`);
+            }
+        }
+
+        return lines.join(';\n')
+    }
+
     getUniqueDDL(unique: IndexModel): string {
         return `CONSTRAINT ${this.getIdentifier(unique)} UNIQUE (${this.getColumnListDDL(unique.columns)})`;
     }
 
     getDropIndexDDL(index: IndexModel): string {
-        return `DROP CONSTRAINT ${this.getIdentifier(index)}`;
+        return `ALTER TABLE ${this.getIdentifier(index.table)} DROP CONSTRAINT ${this.getIdentifier(index)}`;
     }
 
     supportsInlineForeignKey(): boolean {
+        return false;
+    }
+
+    supportsAggregatedAlterTable(): boolean {
         return false;
     }
 

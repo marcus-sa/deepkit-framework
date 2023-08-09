@@ -10,9 +10,10 @@
 
 import { InjectorModule, ProviderWithScope, Token } from '@deepkit/injector';
 import { AbstractClassType, ClassType, CustomError, ExtractClassType, isClass } from '@deepkit/core';
-import { EventListener } from '@deepkit/event';
+import { EventListener, EventToken } from '@deepkit/event';
 import { WorkflowDefinition } from '@deepkit/workflow';
-import { getPartialSerializeFunction, reflect, serializer, Type, TypeClass } from '@deepkit/type';
+import { getPartialSerializeFunction, reflect, ReflectionFunction, ReflectionMethod, serializer, Type, TypeClass } from '@deepkit/type';
+import { ControllerConfig } from './service-container.js';
 
 export type DefaultObject<T> = T extends undefined ? {} : T;
 
@@ -23,6 +24,25 @@ export interface MiddlewareConfig {
 export type MiddlewareFactory = () => MiddlewareConfig;
 
 export type ExportType = AbstractClassType | string | AppModule<any> | Type;
+
+/**
+ * @reflection never
+ */
+export interface AddedListener {
+    eventToken: EventToken;
+    reflection: ReflectionMethod | ReflectionFunction;
+    module?: InjectorModule;
+    classType?: ClassType;
+    methodName?: string;
+    order: number;
+}
+
+export function stringifyListener(listener: AddedListener): string {
+    if (listener.classType) {
+        return listener.classType.name + '.' + listener.methodName;
+    }
+    return listener.reflection.name || 'anonymous function';
+}
 
 export interface ModuleDefinition {
     /**
@@ -217,6 +237,7 @@ export class AppModule<T extends RootModuleDefinition = {}, C extends ExtractCla
 
     public imports: AppModule<any>[] = [];
     public controllers: ClassType[] = [];
+    public commands: { name: string, callback: Function }[] = [];
     public workflows: WorkflowDefinition<any>[] = [];
     public listeners: ListenerType[] = [];
     public middlewares: MiddlewareFactory[] = [];
@@ -269,16 +290,23 @@ export class AppModule<T extends RootModuleDefinition = {}, C extends ExtractCla
     }
 
     /**
-     * A hook point to the service container. Allows to react on a registered provider in some module.
+     * A hook that allows to react on a registered provider in some module.
      */
     processProvider(module: AppModule<any>, token: Token, provider: ProviderWithScope) {
 
     }
 
     /**
-     * A hook point to the service container. Allows to react on a registered controller in some module.
+     * A hook that allows to react on a registered controller in some module.
      */
-    processController(module: AppModule<any>, controller: ClassType) {
+    processController(module: AppModule<any>, config: ControllerConfig) {
+
+    }
+
+    /**
+     * A hook that allows to react on a registered event listeners in some module.
+     */
+    processListener(module: AppModule<any>, listener: AddedListener) {
 
     }
 
@@ -315,6 +343,16 @@ export class AppModule<T extends RootModuleDefinition = {}, C extends ExtractCla
 
     getControllers(): ClassType[] {
         return this.controllers;
+    }
+
+    getCommands(): { name: string, callback: Function }[] {
+        return this.commands;
+    }
+
+    addCommand(name: string, callback: (...args: []) => any): this {
+        this.assertInjectorNotBuilt();
+        this.commands.push({ name, callback });
+        return this;
     }
 
     addController(...controller: ClassType[]): this {

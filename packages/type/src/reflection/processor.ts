@@ -30,6 +30,7 @@ import {
     ReflectionVisibility,
     Type,
     TypeBaseMember,
+    TypeCallSignature,
     TypeClass,
     typeDecorators,
     TypeEnumMember,
@@ -790,18 +791,32 @@ export class Processor {
                             break;
                         }
                         case ReflectionOp.intersection: {
-                            this.handleIntersection();
+                            let t = this.handleIntersection();
+                            if (t) {
+                                if (this.isEnded()) t = assignResult(program.resultType, t);
+                                this.pushType(t);
+                            }
                             break;
                         }
+                        case ReflectionOp.callSignature:
                         case ReflectionOp.function: {
                             const types = this.popFrame() as Type[];
                             const name = program.stack[this.eatParameter() as number] as string;
-                            let t: TypeFunction = {
+
+                            const returnType = types.length > 0 ? types[types.length - 1] as Type : { kind: ReflectionKind.any } as Type;
+                            const parameters = types.length > 1 ? types.slice(0, -1) as TypeParameter[] : [];
+
+                            let t = op === ReflectionOp.callSignature ? {
+                                kind: ReflectionKind.callSignature,
+                                return: returnType,
+                                parameters
+                            } as TypeCallSignature : {
                                 kind: ReflectionKind.function,
                                 name: name || undefined,
-                                return: types.length > 0 ? types[types.length - 1] as Type : { kind: ReflectionKind.any } as Type,
-                                parameters: types.length > 1 ? types.slice(0, -1) as TypeParameter[] : []
-                            };
+                                return: returnType,
+                                parameters
+                            } as TypeFunction;
+
                             if (this.isEnded()) t = assignResult(program.resultType, t);
                             t.return.parent = t;
                             for (const member of t.parameters) member.parent = t;
@@ -905,7 +920,7 @@ export class Processor {
                                 types: []
                             } as TypeObjectLiteral;
 
-                            const frameTypes = this.popFrame() as (TypeIndexSignature | TypePropertySignature | TypeMethodSignature | TypeObjectLiteral)[];
+                            const frameTypes = this.popFrame() as (TypeIndexSignature | TypePropertySignature | TypeMethodSignature | TypeObjectLiteral | TypeCallSignature)[];
                             pushObjectLiteralTypes(t, frameTypes);
 
                             //only for the very last op do we replace this.resultType. Otherwise, objectLiteral in between would overwrite it.
@@ -1347,7 +1362,7 @@ export class Processor {
             if (decorators.length) result.decorators = decorators;
             Object.assign(result.annotations, annotations);
         }
-        this.pushType(result);
+        return result;
     }
 
     private handleDistribute(program: Program) {
@@ -1453,7 +1468,10 @@ export class Processor {
             if (index.kind === ReflectionKind.never) {
                 //ignore
             } else if (index.kind === ReflectionKind.any || isSimpleIndex(index)) {
-                this.push({ kind: ReflectionKind.indexSignature, type, index });
+                const t: TypeIndexSignature = { kind: ReflectionKind.indexSignature, type, index, parent: undefined as any };
+                t.type.parent = t;
+                t.index.parent = t;
+                this.push(t);
             } else {
                 let optional: true | undefined = undefined;
                 if (index.kind === ReflectionKind.literal && !(index.literal instanceof RegExp)) {
@@ -1755,7 +1773,7 @@ function applyPropertyDecorator(type: Type, data: TData) {
 
 function pushObjectLiteralTypes(
     type: TypeObjectLiteral,
-    types: (TypeIndexSignature | TypePropertySignature | TypeMethodSignature | TypeObjectLiteral)[],
+    types: (TypeIndexSignature | TypePropertySignature | TypeMethodSignature | TypeObjectLiteral | TypeCallSignature)[],
 ) {
     let annotations: Annotations = {};
     const decorators: Type[] = [];
@@ -1804,6 +1822,8 @@ function pushObjectLiteralTypes(
                 } else {
                     type.types.push(toAdd);
                 }
+            } else if (member.kind === ReflectionKind.callSignature) {
+                type.types.push(member);
             }
         }
 
