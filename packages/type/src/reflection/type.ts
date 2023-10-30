@@ -68,6 +68,8 @@ export enum ReflectionKind {
     infer,
 
     callSignature,
+
+    typeOnly,
 }
 
 export type TypeDecorator = (annotations: Annotations, decorator: TypeObjectLiteral) => boolean;
@@ -145,6 +147,17 @@ export function getTypeJitContainer(type: Type): JitContainer {
 
 export function clearTypeJitContainer(type: Type): void {
     type.jit = {};
+}
+
+// export interface TypeOnly extends TypeAnnotations {
+//     kind: ReflectionKind.typeOnly;
+//     parent?: Type;
+// }
+
+export interface TypeOnly extends TypeAnnotations {
+    kind: ReflectionKind.typeOnly;
+    typeName: string;
+    parent?: Type;
 }
 
 export interface TypeNever extends TypeAnnotations {
@@ -480,7 +493,7 @@ export type Type =
     | TypeRest
     | TypeRegexp
     | TypeCallSignature
-    ;
+    | TypeOnly;
 
 export type Widen<T> =
     T extends string ? string

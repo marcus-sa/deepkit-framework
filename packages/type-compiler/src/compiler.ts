@@ -93,6 +93,7 @@ import { MappedModifier, ReflectionOp, TypeNumberBrand } from '@deepkit/type-spe
 import { Resolver } from './resolver.js';
 import { knownLibFilesForCompilerOptions } from '@typescript/vfs';
 import * as micromatch from 'micromatch';
+import {index} from "typedoc/dist/lib/output/themes/default/partials";
 
 // don't use from @deepkit/core since we don't want to have a dependency to @deepkit/core
 export function isObject(obj: any): obj is { [key: string]: any } {
@@ -2120,9 +2121,8 @@ export class ReflectionTransformer implements CustomTransformer {
                         });
                     } else if (isFromImport) {
                         if (resolved.importDeclaration) {
-                            //if explicit `import {type T}`, we do not emit an import and instead push any
                             if (resolved.typeOnly) {
-                                program.pushOp(ReflectionOp.any);
+                                this.resolveTypeOnly(program);
                                 return;
                             }
 
@@ -2201,9 +2201,8 @@ export class ReflectionTransformer implements CustomTransformer {
                 //     this.extractPackStructOfType(declaration, program);
                 //     return;
             } else if (isClassDeclaration(declaration) || isFunctionDeclaration(declaration) || isFunctionExpression(declaration) || isArrowFunction(declaration)) {
-                //if explicit `import {type T}`, we do not emit an import and instead push any
                 if (resolved.typeOnly) {
-                    program.pushOp(ReflectionOp.any);
+                    this.resolveTypeOnly(program);
                     return;
                 }
 
@@ -2303,6 +2302,13 @@ export class ReflectionTransformer implements CustomTransformer {
         const typeUser = this.getTypeUser(type);
 
         return declarationUser !== typeUser;
+    }
+
+    //if explicit `import {type T}`, emit `{ typeName: "T" }`
+    protected resolveTypeOnly(program: CompilerProgram) {
+        program.pushFrame();
+        program.pushOp(ReflectionOp.typeOnly);
+        program.popFrameImplicit()
     }
 
     protected resolveTypeParameter(declaration: TypeParameterDeclaration, type: TypeReferenceNode | ExpressionWithTypeArguments, program: CompilerProgram) {

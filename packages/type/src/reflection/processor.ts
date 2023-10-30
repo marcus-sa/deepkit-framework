@@ -433,6 +433,7 @@ export class Processor {
 
         programLoop:
             while (this.program.active) {
+
                 const program = this.program;
                 // process.stdout.write(`jump to program: ${stringifyValueWithType(program.object)}\n`);
                 for (; program.program < program.end; program.program++) {
@@ -480,6 +481,10 @@ export class Processor {
                         case ReflectionOp.any:
                             this.pushType({ kind: ReflectionKind.any });
                             break;
+                        case ReflectionOp.typeOnly: {
+                            this.pushType({ kind: ReflectionKind.typeOnly, typeName: this.pop() as string });
+                            break;
+                        }
                         case ReflectionOp.literal: {
                             const ref = this.eatParameter() as number;
                             this.pushType({ kind: ReflectionKind.literal, literal: program.stack[ref] as string | number | boolean | bigint });
@@ -1209,6 +1214,8 @@ export class Processor {
 
                 result = narrowOriginalLiteral(program.stack[program.stackPointer] as Type);
                 // process.stdout.write(`Done ${program.depth} in ${Date.now() - program.started}ms with ${stringifyValueWithType(program.object)} -> ${stringifyShortResolvedType(result as Type)}\n`);
+
+                console.log(program.stack);
 
                 if (isType(result) && program.object) {
                     if (result.kind === ReflectionKind.class && result.classType === Object) {
