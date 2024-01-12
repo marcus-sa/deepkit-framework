@@ -94,7 +94,13 @@ export class ServiceContainer {
         this.configLoaders.push(loader);
     }
 
-    public process() {
+    private assertProcessed(): void {
+        if (!this.injectorContext) {
+            throw new Error('Service container has not been processed yet. Call `process()` first');
+        }
+    }
+
+    public async process() {
         if (this.injectorContext) return;
 
         this.appModule.addProvider({ provide: ServiceContainer, useValue: this });
@@ -108,21 +114,21 @@ export class ServiceContainer {
         }
         this.appModule.addProvider(ScopedLogger);
 
-        this.setupHook(this.appModule);
+        await this.setupHook(this.appModule);
         this.findModules(this.appModule);
 
-        this.processModule(this.appModule);
+        await this.processModule(this.appModule);
 
-        this.postProcess();
+        await this.postProcess();
 
         this.injectorContext = new InjectorContext(this.appModule);
         this.injectorContext.getRootInjector(); //trigger all injector builds
         this.bootstrapModules();
     }
 
-    protected postProcess() {
+    protected async postProcess() {
         for (const m of this.modules) {
-            m.postProcess();
+            await m.postProcess();
         }
     }
 
@@ -136,11 +142,11 @@ export class ServiceContainer {
     }
 
     public getInjectorContext(): InjectorContext {
-        this.process();
+        this.assertProcessed();
         return this.injectorContext!;
     }
 
-    private setupHook(module: AppModule<any>) {
+    private async setupHook(module: AppModule<any>) {
         let config = module.getConfig();
 
         if (module.configDefinition) {
@@ -162,12 +168,12 @@ export class ServiceContainer {
             }
         }
 
-        module.process();
+        await module.process();
 
         for (const setup of module.setups) setup(module, config);
 
         for (const importModule of module.getImports()) {
-            this.setupHook(importModule);
+            await this.setupHook(importModule);
         }
         return module;
     }
@@ -186,7 +192,7 @@ export class ServiceContainer {
     }
 
     public getInjector<T extends AppModule<any>>(moduleOrClass: ClassType<T> | T): Injector {
-        this.process();
+        this.assertProcessed();
         if (!isClass(moduleOrClass)) return this.getInjectorContext().getInjector(moduleOrClass);
 
         for (const m of this.modules) {
@@ -198,7 +204,7 @@ export class ServiceContainer {
     }
 
     public getModule(moduleClass: ClassType<AppModule<any>>): AppModule<any> {
-        this.process();
+        this.assertProcessed();
         for (const m of this.modules) {
             if (m instanceof moduleClass) {
                 return m;
@@ -211,18 +217,18 @@ export class ServiceContainer {
      * Returns all known instantiated modules.
      */
     getModules(): AppModule<any>[] {
-        this.process();
+        this.assertProcessed();
         return [...this.modules];
     }
 
     public getRootInjector(): Injector {
-        this.process();
+        this.assertProcessed();
         return this.getInjectorContext().getInjector(this.appModule);
     }
 
-    protected processModule(
+    protected async processModule(
         module: AppModule<ModuleDefinition>
-    ): void {
+    ) {
         if (module.injector) {
             throw new Error(`Module ${getClassName(module)} (id=${module.name}) was already imported. Can not re-use module instances.`);
         }
@@ -252,37 +258,37 @@ export class ServiceContainer {
         }
 
         for (const controller of controllers) {
-            this.processController(module, { module, controller });
+            await this.processController(module, { module, controller });
         }
 
         for (const command of commands) {
-            this.processController(module, { module, for: 'cli', ...command });
+            await this.processController(module, { module, for: 'cli', ...command });
         }
 
         for (const provider of providers) {
-            this.processProvider(module, resolveToken(provider), provider);
+            await this.processProvider(module, resolveToken(provider), provider);
         }
 
         for (const listener of listeners) {
             if (isClass(listener)) {
                 providers.unshift({ provide: listener });
                 for (const listenerEntry of this.eventDispatcher.registerListener(listener, module)) {
-                    this.processListener(module, listenerEntry);
+                    await this.processListener(module, listenerEntry);
                 }
             } else {
                 const listenerObject = { fn: listener.callback, order: listener.order, module: listener.module || module };
                 this.eventDispatcher.add(listener.eventToken, listenerObject);
-                this.processListener(module, { eventToken: listener.eventToken, listener: listenerObject });
+                await this.processListener(module, { eventToken: listener.eventToken, listener: listenerObject });
             }
         }
 
         for (const imp of module.getImports()) {
             if (!imp) continue;
-            this.processModule(imp);
+            await this.processModule(imp);
         }
     }
 
-    protected processListener(module: AppModule<any>, listener: EventListenerRegistered) {
+    protected async processListener(module: AppModule<any>, listener: EventListenerRegistered) {
         const addedListener: AddedListener = {
             eventToken: listener.eventToken,
             reflection: isEventListenerContainerEntryCallback(listener.listener)
@@ -291,11 +297,11 @@ export class ServiceContainer {
             order: listener.listener.order,
         };
         for (const m of this.modules) {
-            m.processListener(module, addedListener);
+            await m.processListener(module, addedListener);
         }
     }
 
-    protected processController(module: AppModule<any>, controller: ControllerConfig) {
+    protected async processController(module: AppModule<any>, controller: ControllerConfig) {
         let name = controller.name || '';
         if (controller.controller) {
             if (!name) {
@@ -314,13 +320,13 @@ export class ServiceContainer {
         }
 
         for (const m of this.modules) {
-            m.processController(module, controller);
+            await m.processController(module, controller);
         }
     }
 
-    protected processProvider(module: AppModule<any>, token: Token, provider: ProviderWithScope) {
+    protected async processProvider(module: AppModule<any>, token: Token, provider: ProviderWithScope) {
         for (const m of this.modules) {
-            m.processProvider(module, token, provider);
+            await m.processProvider(module, token, provider);
         }
     }
 }

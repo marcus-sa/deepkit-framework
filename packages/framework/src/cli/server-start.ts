@@ -43,6 +43,7 @@ export class ServerStartController implements Command {
 
         const kernel = this.serviceContainer.getModule(FrameworkModule) as AppModule<any>;
         kernel.configure(overwrite);
+        await this.serviceContainer.process();
         const server = this.serviceContainer.getRootInjector().get(ApplicationServer);
 
         await server.start(true);

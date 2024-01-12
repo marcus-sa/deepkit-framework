@@ -309,28 +309,28 @@ export class AppModule<T extends RootModuleDefinition = {}, C extends ExtractCla
      * When all configuration loaders have been loaded, this method is called.
      * It allows to further manipulate the module state depending on the final config.
      */
-    process() {
+    process(): Promise<void> | void {
 
     }
 
     /**
      * A hook that allows to react on a registered provider in some module.
      */
-    processProvider(module: AppModule<any>, token: Token, provider: ProviderWithScope) {
+    processProvider(module: AppModule<any>, token: Token, provider: ProviderWithScope): Promise<void> | void {
 
     }
 
     /**
      * A hook that allows to react on a registered controller in some module.
      */
-    processController(module: AppModule<any>, config: ControllerConfig) {
+    processController(module: AppModule<any>, config: ControllerConfig): Promise<void> | void {
 
     }
 
     /**
      * A hook that allows to react on a registered event listeners in some module.
      */
-    processListener(module: AppModule<any>, listener: AddedListener) {
+    processListener(module: AppModule<any>, listener: AddedListener): Promise<void> | void {
 
     }
 
@@ -341,7 +341,7 @@ export class AppModule<T extends RootModuleDefinition = {}, C extends ExtractCla
      *
      * Last chance to set up the injector context, via this.setupProvider().
      */
-    postProcess() {
+    postProcess(): Promise<void> | void {
 
     }
 
