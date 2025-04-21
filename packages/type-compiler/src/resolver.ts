@@ -1,17 +1,43 @@
 import micromatch from 'micromatch';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, parse } from 'node:path';
 import {
     CompilerHost,
     CompilerOptions,
     ExportDeclaration,
     Expression,
-    ImportDeclaration, JSDocImportTag,
+    ImportDeclaration,
+    JSDocImportTag,
     ResolvedModule,
+    ResolvedModuleFull,
     SourceFile,
     StringLiteral,
 } from 'typescript';
 import ts from 'typescript';
 
+
 const { createSourceFile, resolveModuleName, isStringLiteral, JSDocParsingMode, ScriptTarget } = ts;
+
+const metadata: { dir: string, content: any | null }[] = [];
+
+export function readNearestMetadataFile(filePath: string): any {
+    const cachedEntry = metadata
+        .filter(entry => filePath.startsWith(entry.dir))
+        .sort((a, b) => b.dir.length - a.dir.length)[0];
+
+    if (cachedEntry) return cachedEntry.content;
+
+    let dir = dirname(filePath);
+    while (dir !== parse(dir).root) {
+        const packageJsonPath = join(dir, '.deepkit/metadata.json');
+        if (existsSync(packageJsonPath)) {
+            const content = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+            metadata.push({ dir, content });
+            return content;
+        }
+        dir = dirname(dir);
+    }
+}
 
 export function patternMatch(path: string, patterns: string[], base?: string): boolean {
     const include = patterns.filter(pattern => pattern[0] !== '!');
@@ -41,6 +67,36 @@ export class Resolver {
         if (!isStringLiteral(moduleSpecifier)) return;
 
         return this.resolveSourceFile(from, moduleSpecifier);
+    }
+
+    resolveExternalLibraryImport(importDeclaration: ImportDeclaration): Required<ResolvedModuleFull> {
+        const resolvedModule = this.resolveImport(importDeclaration);
+        if (!resolvedModule.isExternalLibraryImport) {
+            throw new Error('Resolved module is not an external library import');
+        }
+        if (!resolvedModule.packageId) {
+            // packageId will be undefined when importing from sub-paths such as `rxjs/operators`
+            resolvedModule.packageId = {
+                name: (importDeclaration.moduleSpecifier as StringLiteral).text,
+                subModuleName: 'unknown',
+                version: 'unknown',
+            };
+        }
+        return resolvedModule as Required<ResolvedModuleFull>;
+    }
+
+    resolveImport(importDeclaration: ImportDeclaration): ResolvedModuleFull {
+        if (!isStringLiteral(importDeclaration.moduleSpecifier)) {
+            throw new Error('Invalid import declaration module specifier');
+        }
+        const resolvedModule = this.resolveImpl(
+            importDeclaration.moduleSpecifier,
+            importDeclaration.getSourceFile(),
+        ) as ResolvedModuleFull;
+        if (!resolvedModule) {
+            throw new Error('Cannot resolve module');
+        }
+        return resolvedModule;
     }
 
     protected resolveImpl(modulePath: StringLiteral, sourceFile: SourceFile): ResolvedModule | undefined {

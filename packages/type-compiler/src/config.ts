@@ -25,6 +25,8 @@ export function isObject(obj: any): obj is { [key: string]: any } {
 
 const defaultMergeStrategy = 'merge';
 
+export type ExternalLibraryImports = true | Record<string, true | string[]>;
+
 /**
  * These are the values that can be in the tsconfig.json file.
  */
@@ -56,6 +58,11 @@ export interface TsConfigJson {
          * Per default a few global .d.ts files are excluded like `lib.dom*.d.ts` and `*typedarrays.d.ts`.
          */
         exclude?: string[];
+
+        /**
+         * External library imports to reflect
+         */
+        externalLibraryImports?: ExternalLibraryImports;
     };
 }
 
@@ -104,6 +111,11 @@ export interface ReflectionConfig {
      * or a list of globs to match against.
      */
     reflection?: string[] | Mode;
+
+    /**
+     * External library imports to reflect
+     */
+    externalLibraryImports?: ExternalLibraryImports;
 }
 
 export interface CurrentConfig extends ReflectionConfig {
@@ -184,6 +196,10 @@ function applyConfigValues(existing: CurrentConfig, parent: TsConfigJson, baseDi
         existing.mergeStrategy = parent.deepkitCompilerOptions.mergeStrategy;
     }
 
+    if (isObject(parent.deepkitCompilerOptions) && 'undefined' === typeof existing.externalLibraryImports) {
+        existing.externalLibraryImports = parent.deepkitCompilerOptions.externalLibraryImports;
+    }
+
     if ('undefined' !== typeof parentReflection) {
         const next = parseRawMode(parentReflection);
         if ('undefined' === typeof existing.reflection) {
@@ -219,6 +235,7 @@ function applyConfigValues(existing: CurrentConfig, parent: TsConfigJson, baseDi
 export interface MatchResult {
     tsConfigPath: string;
     mode: (typeof reflectionModes)[number];
+    externalLibraryImports?: ExternalLibraryImports;
 }
 
 export const defaultExcluded = [
@@ -308,6 +325,7 @@ export function getConfigResolver(
         exclude: config.exclude,
         reflection: config.reflection,
         mergeStrategy: config.mergeStrategy || defaultMergeStrategy,
+        externalLibraryImports: config.externalLibraryImports,
     };
 
     if (isDebug()) {
@@ -318,12 +336,14 @@ export function getConfigResolver(
             resolvedConfig.exclude,
             `\npaths:`,
             resolvedConfig.compilerOptions.paths,
+            `\nexternalLibraryImports:`,
+            resolvedConfig.externalLibraryImports,
         );
     }
 
-    const match = (path: string) => {
+    const match = (path: string): MatchResult => {
         const mode = reflectionModeMatcher(config, path);
-        return { mode, tsConfigPath };
+        return { mode, tsConfigPath, externalLibraryImports: config.externalLibraryImports };
     };
 
     return (cache[tsConfigPath] = { config: resolvedConfig, match });

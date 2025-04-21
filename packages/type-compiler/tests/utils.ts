@@ -4,6 +4,8 @@ import { createFSBackedSystem, createVirtualCompilerHost, knownLibFilesForCompil
 import { ReflectionTransformer } from '../src/compiler.js';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
+import { ExternalLibraryImports, ReflectionConfig } from '../src/config';
+import { ExternalLibraryTransformer } from '../src/external-library-compiler';
 
 const defaultLibLocation = dirname(require.resolve('typescript')) + '/'; //node_modules/typescript/lib/
 
@@ -61,6 +63,49 @@ export function transform(files: Record<string, string>, options: ts.CompilerOpt
     return res;
 }
 
+export function transpileExternalLibrary(pkg: any, files: Record<string, string>, imports: ExternalLibraryImports) {
+    // determine imports entry-points from package.json exports
+    // if package.json exports do not exist, read `<package>/<path>.d.ts` or `<package/path/index.d.ts`
+    const compilerOptions: ts.CompilerOptions = {
+        ...defaultCompilerOptions,
+        target: ts.ScriptTarget.ES2015,
+        allowNonTsExtensions: true,
+        module: pkg.type === 'commonjs' ? ts.ModuleKind.CommonJS : ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.NodeNext,
+        experimentalDecorators: true,
+        esModuleInterop: true,
+        skipLibCheck: true,
+    };
+
+    const fsMap = new Map<string, string>();
+    for (const [fileName, source] of Object.entries(files)) {
+        fsMap.set(fullPath(fileName), source);
+    }
+    const system = createFSBackedSystem(fsMap, __dirname, ts, defaultLibLocation);
+
+    const host = createVirtualCompilerHost(system, compilerOptions, ts);
+    host.compilerHost.getDefaultLibLocation = () => defaultLibLocation;
+
+    const rootNames = Object.keys(files).map(fileName => fullPath(fileName));
+    const program = ts.createProgram({
+        rootNames: rootNames,
+        options: compilerOptions,
+        host: host.compilerHost,
+    });
+    for (const d of getPreEmitDiagnostics(program)) {
+        console.log('diagnostics', d.file?.fileName, d.messageText, d.start, d.length);
+    }
+    const res: Record<string, string> = {};
+
+    program.emit(undefined, (fileName, data) => {
+        res[fileName.slice(__dirname.length + 1).replace(/\.js$/, '')] = data;
+    }, undefined, undefined, {
+        before: [(context: TransformationContext) => new ExternalLibraryTransformer(context).forHost(host.compilerHost).withReflection({reflection: 'default', externalLibraryImports: imports})],
+    });
+
+    return res;
+}
+
 /**
  * The first entry in files is executed as main script
  */
@@ -72,7 +117,7 @@ export function transpileAndRun(files: Record<string, string>, options: ts.Compi
     return eval(source[first]);
 }
 
-export function transpile(files: Record<string, string>, options: ts.CompilerOptions = {}): Record<string, string> {
+export function transpile(files: Record<string, string>, options: ts.CompilerOptions = {}, config?: ReflectionConfig): Record<string, string> {
     const compilerOptions: ts.CompilerOptions = {
         ...defaultCompilerOptions,
         target: ts.ScriptTarget.ES2015,
@@ -108,7 +153,7 @@ export function transpile(files: Record<string, string>, options: ts.CompilerOpt
     program.emit(undefined, (fileName, data) => {
         res[fileName.slice(__dirname.length + 1).replace(/\.js$/, '')] = data;
     }, undefined, undefined, {
-        before: [(context: TransformationContext) => new ReflectionTransformer(context).forHost(host.compilerHost).withReflection({reflection: 'default'})],
+        before: [(context: TransformationContext) => new ReflectionTransformer(context).forHost(host.compilerHost).withReflection({reflection: 'default', ...config})],
     });
 
     return res;

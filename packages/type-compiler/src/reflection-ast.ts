@@ -58,6 +58,19 @@ function is__String(value: any): value is __String {
     return typeof value === 'string';
 }
 
+// currently files are stored in node_modules/<package>/.deepkit
+export function getExternalLibraryImportPath(importDeclaration: ImportDeclaration | JSDocImportTag): string {
+    const [first, second, ...rest] = (importDeclaration.moduleSpecifier as StringLiteral).text.split('/');
+    let path = first.startsWith('@')
+        ? `${first}/${second}`
+        : first;
+    path += '/.deepkit';
+    if (rest.length) {
+        path += `/${rest.join('/')}`;
+    }
+    return path;
+}
+
 export function getIdentifierName(node: Identifier | PrivateIdentifier | StringLiteral | __String): string {
     if (is__String(node)) return node as string;
     if (isIdentifier(node) || isPrivateIdentifier(node)) {
@@ -71,6 +84,10 @@ export function getEscapedText(node: Identifier | PrivateIdentifier | StringLite
     if (is__String(node)) return node as string;
     if (isIdentifier(node) || isPrivateIdentifier(node)) return node.escapedText as string;
     return getIdentifierName(node);
+}
+
+export function hasSourceFile(node: Node): boolean {
+    return typeof node.getSourceFile === 'function';
 }
 
 export function findSourceFile(node: Node): SourceFile | undefined {
@@ -252,8 +269,16 @@ function isExternalOrCommonJsModule(file: SourceFile): boolean {
     return (file.externalModuleIndicator || file.commonJsModuleIndicator) !== undefined;
 }
 
+export function isBuiltType(typeVar: Identifier, sourceFile: SourceFile): boolean {
+    return isNodeWithLocals(sourceFile) && !!sourceFile.locals?.has(typeVar.escapedText);
+}
+
 export function isNodeWithLocals(node: Node): node is (Node & { locals: SymbolTable | undefined }) {
     return 'locals' in node;
+}
+
+export function getEntityName(typeName: EntityName): string {
+    return isIdentifier(typeName) ? getIdentifierName(typeName) : getIdentifierName(typeName.right);
 }
 
 //logic copied from typescript
@@ -264,6 +289,16 @@ export function getGlobalsOfSourceFile(file: SourceFile): SymbolTable | void {
     if (file.jsGlobalAugmentations) return file.jsGlobalAugmentations;
     if (file.symbol && file.symbol.globalExports) return file.symbol.globalExports;
 }
+
+export function getExternalRuntimeTypeName(importPath: string): string {
+    return `__ɵΩ${importPath.replace(/[^a-zA-Z0-9]+/g, '_')}`;
+}
+
+export function getRuntimeTypeName(typeName: string): string {
+    return `__Ω${typeName}`;
+}
+
+
 
 /**
  * For imports that can removed (like a class import only used as type only, like `p: Model[]`) we have
